@@ -9,6 +9,8 @@ from lenskit.algorithms import Recommender, als, item_knn as knn
 import pandas as pd
 
 import matplotlib
+import time
+
 
 ratings = pd.read_csv('../ml-100k/u.data', sep='\t', 
                     names=['user','item','rating','timestamp'])
@@ -34,6 +36,7 @@ def eval(aname, algo, train, test):
 
 all_recs = []
 test_data = []
+print(ratings.shape)
 #for train,test in xf.partition_users(ratings[['user','item','rating']],1000,xf.SampleFrac(0.2)):
     
     #test_data.append(test)
@@ -47,14 +50,18 @@ test_data = []
 #output_writer = csv.writer(output_file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
 
 #for n in range(200,10000,100):
-for n in [500]:
-    for i in range(1):
+
+#for n in range(10000,100000,1000):
+for n in [200]:
+    print(n)
+    for i in range(10):
         train = ratings[['user','item','rating']][:n]
         #print(train)
         #train = train.drop([141],axis=0)
         #print(n,i)
         eval('ItemItem',alg_li,train,train)
         #output_writer.writerow([n,native_learn, learn_unlearn, unlearn])
+
 #all_recs = pd.concat(all_recs,ignore_index=True)
 #print(all_recs.head())
 

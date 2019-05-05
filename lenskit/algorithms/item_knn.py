@@ -170,7 +170,9 @@ class ItemItem(Predictor):
         #self._compute_similarities_unlearn_min_centering(ratings,init_rmat,items,users)
         #self._unlearn_min_centering(54,17,init_rmat,self.smat_unlearn)
         
-        self._compute_similarities_unlearn_min_centering_sparse(rmat_scipy,items,users)
+        self._compute_similarities_unlearn_min_centering_sparse_vectorize(rmat_scipy,items,users)
+        #self._compute_similarities_unlearn_min_centering_matrix_vectorize(rmat_scipy,items,users)
+        #self._compute_similarities_unlearn_global_centering_matrix_vectorize(rmat_scipy,items,users)
         #self._unlearn_min_centering_sparse(54,17,init_rmat,self.smat_unlearn_sparse)
         end = time.time()
         learn_unlearn_time = end - start
@@ -181,18 +183,16 @@ class ItemItem(Predictor):
         #print(self.smat_unlearn_sparse)
 
         start = time.time()
-        self._unlearn_min_centering_sparse(54,17,rmat_scipy,self.smat_unlearn_sparse)
+        #self._unlearn_min_centering_sparse(54,17,rmat_scipy,self.smat_unlearn_sparse)
+        self._unlearn_min_centering_matrix(54,17,rmat_scipy,self.smat_unlearn_sparse,init_rmat)
         end = time.time()
         unlearn_time = end - start
         print("Unlearn: {}".format(end-start))
         
         start = time.time()
-        rmat, item_means = self._mean_center(ratings, init_rmat, items)
-        
-        #np.savetxt('test.csv',(rmat.to_scipy().toarray()),delimiter=',')
-        #print(rmat.to_scipy())    
+        rmat, item_means = self._mean_center(ratings, init_rmat, items, users)
+           
         rmat = self._normalize(rmat)
-        #print(rmat.to_scipy())
         _logger.info('[%s] computing similarity matrix', self._timer)
         smat = self._compute_similarities(rmat,items,users)
         
@@ -212,8 +212,8 @@ class ItemItem(Predictor):
         self.sim_matrix_ = smat
         self.user_index_ = users
         self.rating_matrix_ = init_rmat
-        f = open("output.csv","a+")
-        #f.write("{},{},{},{}\n".format(init_rmat.nnz ,native_learn_time,learn_unlearn_time,unlearn_time))
+        f = open("output_matrix.csv","a+")
+        f.write("{},{},{},{}\n".format(init_rmat.nnz ,native_learn_time,learn_unlearn_time,unlearn_time))
         f.close()
         return self 
 
@@ -314,6 +314,32 @@ class ItemItem(Predictor):
         
         return rows, cols, vals #sps.csr_matrix((vals,(rows,cols)),shape=(self.M,self.M))
 
+    def _learn_sim_global_vectorize(self, S_II=None, S_I=None, M_I=None, N_I=None, N_II=None, SUM_I=None, g=None, UM=None):
+        S_II=self.S_II_sparse
+        S_I=self.S_I_sparse
+        M_I=self.M_I_sparse
+        N_I=self.N_I_sparse
+        N_II=self.N_II_sparse
+        SUM_I=self.Sum_I_sparse
+        UM = self.UM_I
+        g = sps.csr_matrix([self.G])
+        
+        M_T = M_I.transpose()
+        
+        M_I_G = sps.csr_matrix(self.M_I - self.G)
+        M_I_M_I = sps.csr_matrix( np.repeat(self.M_I,self.M,axis = 0) + np.repeat(self.M_I.T,self.M,axis=1))
+        top = S_II - S_I.multiply(M_I) - S_I.transpose().multiply(M_T) + g.multiply(S_I+S_I.transpose()) - g.multiply(M_I_M_I).multiply(N_II) + M_I.multiply(M_T).multiply(N_II) + g.multiply(g).multiply(N_II)
+        deno = sps.csr_matrix(S_II.diagonal()) - 2 * (M_I_G).multiply(SUM_I) + (M_I_G).multiply(M_I_G).multiply(N_I)
+        #deno = 2 * M_I.multiply(SUM_I) + M_I.multiply(M_I).multiply(N_I)
+        deno = deno.sqrt()
+        print(deno.shape,deno[0,1],S_II[1,1],M_I_G[0,1],SUM_I[0,1],N_I[0,1],S_I[1,1])
+        deno = deno.multiply(deno.transpose())
+        is_nz = deno > 0
+        deno[is_nz] = np.reciprocal(deno[is_nz])
+        smat = top.multiply(deno)
+        
+        return smat
+
     def _unlearn_min_centering(self,u,t,rmat,smat):
         rmat_scipy = rmat.to_scipy()
         
@@ -331,7 +357,6 @@ class ItemItem(Predictor):
                         self.S_I[k,l] -= rmat_scipy[u,k]
                         self.N_II[k,l] -= 1
                 
-
         for k in range(self.M):
             if smat[k,t] != 0:
                 #print(smat[k,t],k,t)
@@ -406,93 +431,40 @@ class ItemItem(Predictor):
             return 0
         return top / down
     
-    def _compute_similarities_unlearn_min_centering_sparse(self,rmat_scipy,items,users):
+    def _compute_similarities_unlearn_min_centering_sparse_slow(self,rmat_scipy,items,users):
         
         rmat_coo = rmat_scipy.tocoo()
         rows, cols, vals = rmat_coo.row, rmat_coo.col, rmat_coo.data        
         N = len(users)
         M = len(items)
-        
-        #SUM_ITEM = np.zeros((1,M))
-        #Count_ITEM = np.zeros((1,M))
-        #MEAN_ITEM = np.zeros((1,M))
 
         SUM_ITEM = np.zeros(M)
         Count_ITEM = np.zeros(M)
         MEAN_ITEM = np.zeros(M)
         
-        #Count_ITEMITEM = sps.csr_matrix((M,M))
         Count_ITEMITEM_data = []
-        #S_ITEM = sps.csr_matrix((M,M))
         S_ITEM_data = []
-        #S_ITEMITEM = sps.csr_matrix((M,M))
         S_ITEMITEM_data = []
-        #smat = sps.csr_matrix((M,M))
 
         II_ROWS, II_COLS = [], []
-        
-        '''
-        for i in range(rmat_scipy.nnz):
-            c, v = cols[i], vals[i]
-            SUM_ITEM[0,c] += v
-            Count_ITEM[0,c] += 1
-        '''
         for i in range(rmat_scipy.nnz):
             c, v = cols[i], vals[i]
             SUM_ITEM[c] += v
             Count_ITEM[c] += 1
 
         MEAN_ITEM = SUM_ITEM / Count_ITEM
-        
-        #MEAN_ITEM = rmat_scipy.mean(axis=0)
-        #SUM_ITEM = rmat_scipy.sum(axis=0)
-        #Count_ITEM = SUM_ITEM / MEAN_ITEM
-        #print(rmat_scipy.shape,M,N)
-        #print(MEAN_ITEM.shape,SUM_ITEM.shape,M,N)
-        #print(rmat_scipy.shape,M)
         for i in range(N):
             idx = np.argwhere(rows == i)
-            #idx = rmat_scipy.getrow(i).indices
-            #if len(idx) > 1:
             for k_idx in range(len(idx)):
                 for l_idx in range(len(idx)):
-            #comb = combinations(idx,2)
-            #for k in idx:
-                #for l in idx:
-            #for pairs in list(comb):
-            #for k_idx in range(len(idx)):
-                #for l_idx in range(k_idx+1,len(idx)):
-                    #k,l = idx[k_idx],idx[l_idx]
-                    #if(k_idx!=l_idx):
                     k = cols[idx[k_idx]][0]
                     l = cols[idx[l_idx]][0]
-                    #S_ITEMITEM[k,l] += vals[idx[k_idx]] * vals[idx[l_idx]]
-                    #S_ITEM[k,l] += vals[idx[k_idx]] 
-                    #Count_ITEMITEM[k,l] += 1
-                    #print(k,l,rmat_scipy[i,k])
                     II_ROWS.append(k)
                     II_COLS.append(l)
-                    #print(k,l,vals[idx[k_idx]], vals[idx[l_idx]])
                     Count_ITEMITEM_data.append(1)
-                    S_ITEM_data.append(rmat_scipy[i,k])
-                    s_ii = rmat_scipy[i,k] * rmat_scipy[i,l]
+                    s_ii = vals[idx[k_idx]][0] * vals[idx[l_idx]][0]
                     S_ITEMITEM_data.append(s_ii)
-                    '''
-                    II_ROWS.append(l)
-                    II_COLS.append(k)
-                    Count_ITEMITEM_data.append(1)
-                    S_ITEM_data.append(rmat_scipy[i,l])
-                    S_ITEMITEM_data.append(s_ii)
-                    '''
-            '''
-            for  k in idx:
-                II_ROWS.append(k)
-                II_COLS.append(k)
-                Count_ITEMITEM_data.append(1)
-                S_ITEM_data.append(rmat_scipy[i,k])
-                S_ITEMITEM_data.append(rmat_scipy[i,k] * rmat_scipy[i,k])
-            '''
-        #print(len(II_ROWS),len(II_COLS),len(Count_ITEMITEM_data))
+                    S_ITEM_data.append(vals[idx[k_idx]][0])
         II_ROWS = np.array(II_ROWS)#.flatten()
         II_COLS = np.array(II_COLS)#.flatten()
         S_ITEM_data = np.array(S_ITEM_data)#.flatten()
@@ -518,35 +490,126 @@ class ItemItem(Predictor):
         self.M = M
         
         self.smat_unlearn_sparse_csr = self._learn_sim_vectorize()
-        '''
-        Count_ITEMITEM_coo = Count_ITEMITEM.tocoo()
-        ii_rows, ii_cols = Count_ITEMITEM_coo.row, Count_ITEMITEM_coo.col
         
-        smat_col = []
-        smat_row = []
-        smat_vals = []
-        for i in range(Count_ITEMITEM.nnz):
-            k, l = ii_rows[i], ii_cols[i]
-            
-            if k != l:
-                if(k==22):
-                    print(k,l)
-                    self.print=True
-                else:
-                    self.print=False
-                #if k == 22:
-                    #print(k,l,S_ITEMITEM[k,l],S_ITEMITEM[k,k],S_ITEMITEM[l,l],S_ITEM[k,l],S_ITEM[l,k],MEAN_ITEM[k],MEAN_ITEM[l],Count_ITEMITEM[k,l],Count_ITEM[k],Count_ITEM[l],SUM_ITEM[k],SUM_ITEM[l])
-                smat = self._learn_sim(S_ITEMITEM[k,l],S_ITEMITEM[k,k],S_ITEMITEM[l,l],S_ITEM[k,l],S_ITEM[l,k],MEAN_ITEM[k],MEAN_ITEM[l],Count_ITEMITEM[k,l],Count_ITEM[k],Count_ITEM[l],SUM_ITEM[k],SUM_ITEM[l])
-                if smat > 0:
-                    smat_col.append(l)
-                    smat_row.append(k)
-                    smat_vals.append(smat)
-                    #print(smat,k,l)
+    
+    def _compute_similarities_unlearn_min_centering_sparse_vectorize(self,rmat_scipy,items,users):
+        #rmat_coo = rmat_scipy.tocoo()
+        #cols, vals = rmat_coo.col, rmat_coo.data        
+        N = len(users)
+        M = len(items)
 
-        self.smat_unlearn_sparse = sps.csr_matrix((smat_vals,(smat_row,smat_col)),shape=(M,M))
+        #SUM_ITEM = np.zeros(M)
+        #Count_ITEM = np.zeros(M)
+        #MEAN_ITEM = np.zeros(M)
+        #Count_ITEMITEM_data = []
+        #S_ITEM_data = []
+        #S_ITEMITEM_data = []
+
+        #II_ROWS, II_COLS = [], []
         '''
-    def _unlearn_min_centering_sparse(self,u,t,rmat_scipy,smat):
+        for i in range(rmat_scipy.nnz):
+            c, v = cols[i], vals[i]
+            SUM_ITEM[c] += v
+            Count_ITEM[c] += 1
+
+        MEAN_ITEM = SUM_ITEM / Count_ITEM
+        '''
         
+        rmat_mask = rmat_scipy.copy()
+        rmat_mask[rmat_scipy>0] = 1
+
+        self.S_I_sparse = rmat_scipy.transpose() @ rmat_mask
+        self.S_II_sparse = rmat_scipy.transpose() @ rmat_scipy
+        self.N_II_sparse = rmat_mask.transpose() @ rmat_mask
+
+        #
+        
+        #self.S_I_sparse.sort_indices()
+        print("self.S_I_sparse.indices[self.S_I_sparse.indptr[138]:self.S_I_sparse.indptr[139]]: ",self.S_I_sparse.indices[self.S_I_sparse.indptr[138]:self.S_I_sparse.indptr[139]])
+        print("self.S_I_sparse.data[self.S_I_sparse.indptr[138]:self.S_I_sparse.indptr[139]]: ",self.S_I_sparse.data[self.S_I_sparse.indptr[138]:self.S_I_sparse.indptr[139]])
+        print("self.S_I_sparse[138,17]",self.S_I_sparse[138,17])
+        #print("self.S_I_sparse.getrow(138)")
+        #print(self.S_I_sparse.getrow(138))
+        print("self.S_I_sparse.indices[self.S_I_sparse.indptr[17]:self.S_I_sparse.indptr[18]],self.S_I_sparse[17,138]: ",self.S_I_sparse.indices[self.S_I_sparse.indptr[17]:self.S_I_sparse.indptr[18]])
+        print("self.S_I_sparse.data[self.S_I_sparse.indptr[17]:self.S_I_sparse.indptr[18]]: ",self.S_I_sparse.data[self.S_I_sparse.indptr[17]:self.S_I_sparse.indptr[18]])
+        print("self.S_I_sparse[17,138]",self.S_I_sparse[17,138])
+        #print("self.S_I_sparse.getrow(17): ")
+        #print(self.S_I_sparse.getrow(17))
+        
+        self.N_I = np.array(rmat_mask.sum(axis = 0)).squeeze()
+        self.Sum_I = np.array(rmat_scipy.sum(axis=0)).squeeze()
+        self.M_I = self.Sum_I / self.N_I
+
+        self.M_I_sparse = sps.csr_matrix(self.M_I)
+        self.N_I_sparse = sps.csr_matrix(self.N_I)
+        self.Sum_I_sparse = sps.csr_matrix(self.Sum_I)
+
+        self.N = N
+        self.M = M
+        
+        self.smat_unlearn_sparse_csr = self._learn_sim_vectorize()
+
+    def _compute_similarities_unlearn_min_centering_sparse(self,rmat_scipy,items,users):
+        
+        rmat_coo = rmat_scipy.tocoo()
+        rows, cols, vals = rmat_coo.row, rmat_coo.col, rmat_coo.data        
+        N = len(users)
+        M = len(items)
+        SUM_ITEM = np.zeros(M)
+        Count_ITEM = np.zeros(M)
+        MEAN_ITEM = np.zeros(M)
+        
+        Count_ITEMITEM_data = []
+        S_ITEM_data = []
+        S_ITEMITEM_data = []
+
+        II_ROWS, II_COLS = [], []
+        for i in range(rmat_scipy.nnz):
+            c, v = cols[i], vals[i]
+            SUM_ITEM[c] += v
+            Count_ITEM[c] += 1
+
+        MEAN_ITEM = SUM_ITEM / Count_ITEM
+        for i in range(N):
+            idx = np.argwhere(rows == i)
+            for k_idx in range(len(idx)):
+                for l_idx in range(len(idx)):
+                    k = cols[idx[k_idx]][0]
+                    l = cols[idx[l_idx]][0]
+                    II_ROWS.append(k)
+                    II_COLS.append(l)
+                    Count_ITEMITEM_data.append(1)
+                    S_ITEM_data.append(rmat_scipy[i,k])
+                    s_ii = rmat_scipy[i,k] * rmat_scipy[i,l]
+                    S_ITEMITEM_data.append(s_ii)
+        II_ROWS = np.array(II_ROWS)
+        II_COLS = np.array(II_COLS)
+        S_ITEM_data = np.array(S_ITEM_data)
+        S_ITEMITEM_data = np.array(S_ITEMITEM_data)
+        
+        Count_ITEMITEM = sps.csr_matrix((Count_ITEMITEM_data, (II_ROWS,II_COLS)), shape=(M,M))
+        S_ITEM = sps.csr_matrix((S_ITEM_data, (II_ROWS,II_COLS)), shape=(M,M))
+        S_ITEMITEM = sps.csr_matrix((S_ITEMITEM_data, (II_ROWS,II_COLS)), shape=(M,M))
+        
+        self.S_I_sparse = S_ITEM
+        self.S_II_sparse = S_ITEMITEM
+        self.N_II_sparse = Count_ITEMITEM
+
+        self.M_I = MEAN_ITEM
+        self.N_I = Count_ITEM
+        self.Sum_I = SUM_ITEM
+
+        self.M_I_sparse = sps.csr_matrix(MEAN_ITEM)
+        self.N_I_sparse = sps.csr_matrix(Count_ITEM)
+        self.Sum_I_sparse = sps.csr_matrix(SUM_ITEM)
+
+        self.N = N
+        self.M = M
+        
+        self.smat_unlearn_sparse_csr = self._learn_sim_vectorize()
+    
+    def _unlearn_min_centering_sparse(self,u,t,rmat_scipy,smat):
+        #print(type(self.Sum_I),type(self.M_I),type(self.N_I),type(self.S_II_sparse),type(self.S_I_sparse),type(self.S_II_sparse))
         val_u_t = rmat_scipy[u,t]
         '''
         self.Sum_I[0,t] -= val_u_t
@@ -556,20 +619,6 @@ class ItemItem(Predictor):
         self.Sum_I[t] -= val_u_t
         self.M_I[t] = ( self.M_I[t] * self.N_I[t] - val_u_t ) / (self.N_I[t] - 1)
         self.N_I[t] -= 1
-        #N_II_coo = self.N_II_sparse.tocoo()
-        #rows, cols = N_II_coo.row, N_II_coo.col
-
-        '''
-        for i in range(N_II_coo.nnz):
-            k, l = rows[i], cols[i]
-            if rmat_scipy[u,k] != 0 and rmat_scipy[u,l] != 0:
-                if k == t or l == t :
-                    print(k,l)
-                    self.S_II_sparse[k,l] -= rmat_scipy[u,k] * rmat_scipy[u,l]
-                    self.S_I_sparse[k,l] -= rmat_scipy[u,k]
-                    self.N_II_sparse[k,l] -= 1
-        '''
-        #row_mask = np.argwhere(rows==t)
         for l in self.N_II_sparse.getrow(t).indices:
             #k, l = rows[i], cols[i]
             val_u_l = rmat_scipy[u,l]
@@ -577,41 +626,170 @@ class ItemItem(Predictor):
                 self.S_II_sparse[t,l] -= val_u_t * val_u_l
                 self.S_I_sparse[t,l] -= val_u_t
                 self.N_II_sparse[t,l] -= 1
+                #print(val_u_t * val_u_l,val_u_t,t,l)
                 if t != l:
                     self.S_II_sparse[l,t] = self.S_II_sparse[t,l]
                     self.S_I_sparse[l,t] = self.S_I_sparse[t,l]
                     self.N_II_sparse[l,t] -= 1
-        
+        '''
+        val_u_ls = rmat_scipy[u,:]
+        val_u_ls_mask = val_u_ls.copy()
+        val_u_ls_mask[val_u_ls > 0] = 1
+        self.S_II_sparse[t,:] -= val_u_t*val_u_ls.multiply(val_u_ls_mask)
+        self.S_I_sparse[t,:] -= val_u_t*val_u_ls_mask
+        self.N_II_sparse[t,:] -= val_u_ls_mask
+        '''
+        #indptr = self.N_II_sparse.indptr
+        #rmat_indptr = rmat_scipy.indptr
+        #rmat_indices = rmat_scipy.indices[rmat_indptr[u]:rmat_indptr[u+1]]
 
-        #smat_coo = smat.tocoo()
-
-        #index = np.argwhere(smat_coo.col == t)
-        #print(type(smat.getrow(t)))
-        #self._learn_sim_vectorize()
-        
         for k in smat.getrow(t).indices:
-            #k = smat_coo.row[i][0]
-            #print(smat[k,t],k,t)
             if k != t:
                 #smat[k,t] = self._learn_sim(self.S_II_sparse[k,t],self.S_II_sparse[k,k],self.S_II_sparse[t,t],self.S_I_sparse[k,t],self.S_I_sparse[t,k],self.M_I[0,k],self.M_I[0,t],self.N_II_sparse[k,t],self.N_I[0,k],self.N_I[0,t],self.Sum_I[0,k],self.Sum_I[0,t])
                 smat[k,t] = self._learn_sim(self.S_II_sparse[k,t],self.S_II_sparse[k,k],self.S_II_sparse[t,t],self.S_I_sparse[k,t],self.S_I_sparse[t,k],self.M_I[k],self.M_I[t],self.N_II_sparse[k,t],self.N_I[k],self.N_I[t],self.Sum_I[k],self.Sum_I[t])
-               
+                #print(self.S_II_sparse[k,t],self.S_II_sparse[k,k],self.S_II_sparse[t,t],self.S_I_sparse[k,t],self.S_I_sparse[t,k],self.M_I[0,k],self.M_I[0,t],self.N_II_sparse[k,t],self.N_I[0,k],self.N_I[0,t],self.Sum_I[0,k],self.Sum_I[0,t])
                 smat[t,k] = smat[k,t]
-            #print(smat[k,t])
+            #print(smat[k,t],k,t)
+        #self.S_I_sparse.eliminate_zeros()
+        #self.S_II_sparse.eliminate_zeros()
+        #self.N_II_sparse.eliminate_zeros()
+        #smat.eliminate_zeros()
 
-        self.S_I_sparse.eliminate_zeros()
-        self.S_II_sparse.eliminate_zeros()
-        self.N_II_sparse.eliminate_zeros()
+    def _compute_similarities_unlearn_min_centering_matrix_vectorize(self,rmat_scipy,items,users):
+        N = len(users)
+        M = len(items)
+        rmat_mask = rmat_scipy.copy()
+        rmat_mask[rmat_scipy>0] = 1
+
+        self.S_I_sparse = rmat_scipy.transpose() @ rmat_mask
+        self.S_II_sparse = rmat_scipy.transpose() @ rmat_scipy
+        self.N_II_sparse = rmat_mask.transpose() @ rmat_mask
+
+        self.S_I_matrix = matrix.CSR(self.S_I_sparse.shape[0], self.S_I_sparse.shape[1], self.S_I_sparse.nnz,
+                                        self.S_I_sparse.indptr.copy(), self.S_I_sparse.indices.copy(), self.S_I_sparse.data)
+        self.S_II_matrix = matrix.CSR(self.S_II_sparse.shape[0], self.S_II_sparse.shape[1], self.S_II_sparse.nnz,
+                                        self.S_II_sparse.indptr.copy(), self.S_II_sparse.indices.copy(), self.S_II_sparse.data)
+        self.N_II_matrix = matrix.CSR(self.N_II_sparse.shape[0], self.N_II_sparse.shape[1], self.N_II_sparse.nnz,
+                                        self.N_II_sparse.indptr.copy(), self.N_II_sparse.indices.copy(), self.N_II_sparse.data)
+
+        self.N_I = rmat_mask.sum(axis = 0)
+        self.Sum_I = rmat_scipy.sum(axis=0)
+        self.M_I = self.Sum_I / self.N_I
+
+        self.M_I_sparse = sps.csr_matrix(self.M_I)
+        self.N_I_sparse = sps.csr_matrix(self.N_I)
+        self.Sum_I_sparse = sps.csr_matrix(self.Sum_I)
+
+        self.N = N
+        self.M = M
+        
+        self.smat_unlearn_sparse_csr = self._learn_sim_vectorize()
+
+    def _unlearn_min_centering_matrix(self,u,t,rmat_scipy,smat,rmat):
+        
+        val_u_t = rmat_scipy[u,t]
+
+        self.Sum_I[0,t] -= val_u_t
+        self.M_I[0,t] = ( self.M_I[0,t] * self.N_I[0,t] - val_u_t ) / (self.N_I[0,t] - 1)
+        self.N_I[0,t] -= 1
+
+        rmat_u_colinds = rmat.row_cs(u)
+        for l_idx, l in enumerate(self.S_I_matrix.row_cs(t)):
+            rmat_idx = np.where(rmat_u_colinds == l)[0]
+            if len(rmat_idx == 1):
+                val_u_l = rmat.values[rmat.rowptrs[u]+rmat_idx]
+                self.S_II_matrix.values[self.S_I_matrix.rowptrs[t]+l_idx] -= val_u_l * val_u_t
+                self.S_I_matrix.values[self.S_II_matrix.rowptrs[t]+l_idx] -= val_u_t
+                self.N_II_matrix.values[self.N_II_matrix.rowptrs[t]+l_idx] -= 1
+        
+        
+        
+        for k_idx, k in enumerate(smat.getrow(t).indices):
+            if k != t:
+                #print(k,t,smat[k,t])
+                indices_k = self.N_II_matrix.colinds[self.N_II_matrix.rowptrs[k]:self.N_II_matrix.rowptrs[k+1]]
+                
+                kt_idx = self.N_II_matrix.rowptrs[k] + np.where(indices_k == t)[0]
+                kk_idx = self.N_II_matrix.rowptrs[k] + np.where(indices_k == k)[0]
+
+                indices_t = self.N_II_matrix.colinds[self.N_II_matrix.rowptrs[t]:self.N_II_matrix.rowptrs[t+1]]
+                tk_idx = self.N_II_matrix.rowptrs[t] + np.where(indices_t == k)[0]
+                tt_idx = self.N_II_matrix.rowptrs[t] + np.where(indices_t == t)[0]
+
+                smat.data[smat.indptr[t]+k_idx] = self._learn_sim(
+                                                                    self.S_II_matrix.values[kt_idx],
+                                                                    self.S_II_matrix.values[kk_idx],
+                                                                    self.S_II_matrix.values[tt_idx],
+                                                                    self.S_I_matrix.values[kt_idx],
+                                                                    self.S_I_matrix.values[tk_idx],
+                                                                    self.M_I[0,k],
+                                                                    self.M_I[0,t],
+                                                                    self.N_II_matrix.values[kt_idx],
+                                                                    self.N_I[0,k],
+                                                                    self.N_I[0,t],
+                                                                    self.Sum_I[0,k],
+                                                                    self.Sum_I[0,t])
+                
+                
+                #print(self.S_I_matrix.values[kt_idx],self.S_I_sparse[k,t],self.S_I_matrix.row_cs(k),self.S_I_matrix.row_vs(k))
+                #print(self.S_I_matrix.values[tk_idx],self.S_I_sparse[t,k],self.S_I_matrix.row_cs(t),self.S_I_matrix.row_vs(t))
+                
+                smat[k,t] = smat[t,k]
+                #print(smat.data[smat.indptr[t]+k_idx])
+        #self.S_I_sparse.eliminate_zeros()
+        #self.S_II_sparse.eliminate_zeros()
+        #self.N_II_sparse.eliminate_zeros()
         smat.eliminate_zeros()
 
+    def _compute_similarities_unlearn_global_centering_matrix_vectorize(self,rmat_scipy,items,users):
+        M = len(items)
+        N = len(users)
+        rmat_mask = rmat_scipy.copy()
+        rmat_mask[rmat_scipy>0] = 1
 
-    def _mean_center(self, ratings, rmat, items):
+        self.N_I = rmat_mask.sum(axis = 0)
+        Sum_I = rmat_scipy.sum(axis=0)
+        
+        self.M_I = Sum_I / self.N_I
+        self.UM_I = rmat_scipy.mean(axis=1)
+        self.G = rmat_scipy.sum() / rmat_scipy.nnz
+
+        self.Sum_I = np.multiply((rmat_scipy - self.M_I - self.UM_I + self.G),rmat_mask.toarray()).sum(axis=0)
+        
+        self.M_I_sparse = sps.csr_matrix(self.M_I)
+        self.N_I_sparse = sps.csr_matrix(self.N_I)
+        self.Sum_I_sparse = sps.csr_matrix(self.Sum_I)
+        self.UM_I_sparse = sps.csr_matrix(self.UM_I)
+
+        self.N = N
+        self.M = M
+
+        #print(rmat_scipy.shape,self.UM_I_sparse.shape,self.UM_I.shape)
+        rmat_centered = sps.csr_matrix(rmat_scipy.toarray() - self.UM_I)
+        rmat_centered = rmat_centered.multiply(rmat_mask)
+        self.S_I_sparse = rmat_centered.transpose() @ rmat_mask
+        self.S_II_sparse = rmat_centered.transpose() @ rmat_centered
+        self.N_II_sparse = rmat_mask.transpose() @ rmat_mask
+
+        self.smat_unlearn_sparse_csr = self._learn_sim_global_vectorize()
+
+
+    def _mean_center(self, ratings, rmat, items, users):
         if not self.center:
             return rmat, None
 
         item_means = ratings.groupby('item').rating.mean()
         item_means = item_means.reindex(items).values
+        
+        user_means = ratings.groupby('user').rating.mean()
+        user_means = user_means.reindex(users).values
+
+        global_mean = ratings.rating.mean()
+
+        #mcvals = rmat.values - item_means[rmat.colinds] - user_means[rmat.rowinds()] + global_mean
+        #Old Mean Centering
         mcvals = rmat.values - item_means[rmat.colinds]
+        
         nmat = matrix.CSR(rmat.nrows, rmat.ncols, rmat.nnz,
                           rmat.rowptrs.copy(), rmat.colinds.copy(), mcvals)
         _logger.info('[%s] computed means for %d items', self._timer, len(item_means))
@@ -625,6 +803,7 @@ class ItemItem(Predictor):
         # and multiply by a diagonal to normalize columns
         recip_norms = norms.copy()
         is_nz = recip_norms > 0
+        #print(recip_norms[1],rmat.getcol(1))
         recip_norms[is_nz] = np.reciprocal(recip_norms[is_nz])
         norm_mat = rmat @ sps.diags(recip_norms)
         assert norm_mat.shape[1] == rmat.shape[1]
