@@ -156,35 +156,33 @@ class ItemItem(Predictor):
 
         init_rmat, users, items = matrix.sparse_ratings(ratings)
         
+        '''
+        # Find User Rating to remove for experimenting with Unlearn Algorithm
+        # Try to Find non trivial rating items to remove 
         for index, row in ratings.iterrows():
             if items.get_loc(row['item']) in [17,138,22,83,76,31,92]:
                 #print(row['user'],row['item'],index,users.get_loc(row['user']),items.get_loc(row['item']))
                 pass
+        '''
         n_items = len(items)
         _logger.info('[%s] made sparse matrix for %d items (%d ratings from %d users)',
                      self._timer, len(items), init_rmat.nnz, len(users))
 
         start = time.time()
         rmat_scipy = init_rmat.to_scipy()
-        #self._compute_similarities_unlearn(ratings,init_rmat,items,users)
-        #self._compute_similarities_unlearn_min_centering(ratings,init_rmat,items,users)
-        #self._unlearn_min_centering(54,17,init_rmat,self.smat_unlearn)
         
         self._compute_similarities_unlearn_min_centering_sparse_vectorize(rmat_scipy,items,users)
-        #self._compute_similarities_unlearn_min_centering_matrix_vectorize(rmat_scipy,items,users)
-        #self._compute_similarities_unlearn_global_centering_matrix_vectorize(rmat_scipy,items,users)
-        #self._unlearn_min_centering_sparse(54,17,init_rmat,self.smat_unlearn_sparse)
         end = time.time()
         learn_unlearn_time = end - start
         print("Unlearn Supported Learning: {}".format(end-start))
         
         rows, cols, vals = self.smat_unlearn_sparse_csr
         self.smat_unlearn_sparse = sps.csr_matrix((vals,(rows,cols)),shape=(self.M,self.M))
+        # Print OUT Similarity Matrix to Verify Completeness
         #print(self.smat_unlearn_sparse)
 
         start = time.time()
-        #self._unlearn_min_centering_sparse(54,17,rmat_scipy,self.smat_unlearn_sparse)
-        self._unlearn_min_centering_matrix(54,17,rmat_scipy,self.smat_unlearn_sparse,init_rmat)
+        self._unlearn_min_centering_sparse(54,17,rmat_scipy,self.smat_unlearn_sparse)
         end = time.time()
         unlearn_time = end - start
         print("Unlearn: {}".format(end-start))
@@ -198,6 +196,7 @@ class ItemItem(Predictor):
         
         end = time.time()
         native_learn_time = end - start
+        # Print OUT Similarity Matrix to Verify Completeness
         #print(smat.to_scipy())
         print("Native Learning: {}".format(end-start))
 
@@ -212,11 +211,17 @@ class ItemItem(Predictor):
         self.sim_matrix_ = smat
         self.user_index_ = users
         self.rating_matrix_ = init_rmat
-        f = open("output_matrix.csv","a+")
-        f.write("{},{},{},{}\n".format(init_rmat.nnz ,native_learn_time,learn_unlearn_time,unlearn_time))
-        f.close()
+
+        # Save the Time Cost evaluation result
+        #f = open("output_matrix.csv","a+")
+        #f.write("{},{},{},{}\n".format(init_rmat.nnz ,native_learn_time,learn_unlearn_time,unlearn_time))
+        #f.close()
         return self 
 
+    # Calculate the summations for unlearn supported learning algorithm(summation form of the native algorithm)
+    # Mean Centering is only done with Item Means
+    # Use Nested Loop and np arrays (matrix)
+    # Super Slow
     def _compute_similarities_unlearn_min_centering(self,ratings,rmat,items,users):
         rmat_scipy = rmat.to_scipy()
         N = len(users)
@@ -231,12 +236,9 @@ class ItemItem(Predictor):
         smat = np.zeros((M,M))
         Count_ITEMITEM = np.zeros((M,M))
 
-        #rmat_scipy[18,22] = 0
         for i in range(N):
             for j in range(M):
                 if rmat_scipy[i,j] != 0:
-                    #if j == 22 or j == 76:
-                        #print(i,j,rmat_scipy[i,j],items[i],users[j])
                     SUM_ITEM[j] += rmat_scipy[i,j]
                     Count_ITEM[j] += 1
         MEAN_ITEM = SUM_ITEM / Count_ITEM
@@ -270,6 +272,9 @@ class ItemItem(Predictor):
                     
         self.smat_unlearn = smat
 
+    # Given the summations
+    # Calculate the similarity between item k and item l
+    # It is to support _compute_similarities_unlearn_min_centering and _unlearn_min_centering_sparse
     def _learn_sim(self,Skl,Skk,Sll,Sk,Sl,Mk,Ml,Nkl,Nk,Nl,Sumk,Suml):
         top = Skl-Mk*Sl-Ml*Sk+Mk*Ml*Nkl
         deno = np.sqrt(Skk-2*Mk*Sumk+(Mk**2)*Nk) * np.sqrt(Sll-2*Ml*Suml+(Ml**2)*Nl)
@@ -277,7 +282,11 @@ class ItemItem(Predictor):
             return 0
         else:
             return top/deno 
-
+    
+    # Vectorize version of _learn_sim
+    # Use csr_matrix
+    # Calculate the similarity matrix Given all the summations
+    # It is to support _compute_similarities_unlearn_min_centering_sparse_slow and _compute_similarities_unlearn_min_centering_sparse_vectorize
     def _learn_sim_vectorize(self, S_II=None, S_I=None, M_I=None, N_I=None, N_II=None, SUM_I=None):
         S_II=self.S_II_sparse
         S_I=self.S_I_sparse
@@ -314,6 +323,9 @@ class ItemItem(Predictor):
         
         return rows, cols, vals #sps.csr_matrix((vals,(rows,cols)),shape=(self.M,self.M))
 
+    # Given the summations Calculate the similarity matrix
+    # Vectorize version of _learn_similarities
+    # Mean Centering is done with Item Means, Uesr Means, and Global Mean
     def _learn_sim_global_vectorize(self, S_II=None, S_I=None, M_I=None, N_I=None, N_II=None, SUM_I=None, g=None, UM=None):
         S_II=self.S_II_sparse
         S_I=self.S_I_sparse
@@ -330,9 +342,8 @@ class ItemItem(Predictor):
         M_I_M_I = sps.csr_matrix( np.repeat(self.M_I,self.M,axis = 0) + np.repeat(self.M_I.T,self.M,axis=1))
         top = S_II - S_I.multiply(M_I) - S_I.transpose().multiply(M_T) + g.multiply(S_I+S_I.transpose()) - g.multiply(M_I_M_I).multiply(N_II) + M_I.multiply(M_T).multiply(N_II) + g.multiply(g).multiply(N_II)
         deno = sps.csr_matrix(S_II.diagonal()) - 2 * (M_I_G).multiply(SUM_I) + (M_I_G).multiply(M_I_G).multiply(N_I)
-        #deno = 2 * M_I.multiply(SUM_I) + M_I.multiply(M_I).multiply(N_I)
         deno = deno.sqrt()
-        print(deno.shape,deno[0,1],S_II[1,1],M_I_G[0,1],SUM_I[0,1],N_I[0,1],S_I[1,1])
+        #print(deno.shape,deno[0,1],S_II[1,1],M_I_G[0,1],SUM_I[0,1],N_I[0,1],S_I[1,1])
         deno = deno.multiply(deno.transpose())
         is_nz = deno > 0
         deno[is_nz] = np.reciprocal(deno[is_nz])
@@ -340,6 +351,9 @@ class ItemItem(Predictor):
         
         return smat
 
+    # Unlearn Algorithm
+    # Mean Centering is only done with Item Means
+    # Remove User u rating for Item t
     def _unlearn_min_centering(self,u,t,rmat,smat):
         rmat_scipy = rmat.to_scipy()
         
@@ -364,7 +378,10 @@ class ItemItem(Predictor):
                 smat[t,k] = smat[k,t]
                 #print(smat[k,t])
 
-    def _compute_similarities_unlearn(self,ratings,rmat,items,users):
+    # Calculate the summations for unlearn supported learning algorithm(summation form of the native algorithm)
+    # Mean Centering is done with Item Means, Uesr Means, and Global Mean
+    # Np arrays/matrices are used
+    def _compute_similarities_unlearn_global(self,ratings,rmat,items,users):
         
         rmat_scipy = rmat.to_scipy()
         
@@ -422,6 +439,10 @@ class ItemItem(Predictor):
                 #    print(rmat_scipy)
         #print(smat)
     
+    
+    # Given the summations 
+    # Calculate the similarity between Item k and Item l
+    # Mean Centering is done with Item Means, Uesr Means, and Global Mean
     def _learn_similarities_(self,Skl,Sk,Sl,Skk,Sll,g,Mk,Ml,N1,N2):
         
         top = Skl - Mk*Sl - Ml*Sk + g*(Sk+Sl) - g * (Mk + Ml) * N1 + Mk * Ml * N1 + g*g*N1
@@ -431,6 +452,11 @@ class ItemItem(Predictor):
             return 0
         return top / down
     
+
+    # Calculate the summations for unlearn supported learning algorithm(summation form of the native algorithm)
+    # Mean Centering is only done with Item Means
+    # csr_matrix version of _compute_similarities_unlearn_min_centering
+    # Not Vectorize Slow
     def _compute_similarities_unlearn_min_centering_sparse_slow(self,rmat_scipy,items,users):
         
         rmat_coo = rmat_scipy.tocoo()
@@ -491,29 +517,14 @@ class ItemItem(Predictor):
         
         self.smat_unlearn_sparse_csr = self._learn_sim_vectorize()
         
-    
-    def _compute_similarities_unlearn_min_centering_sparse_vectorize(self,rmat_scipy,items,users):
-        #rmat_coo = rmat_scipy.tocoo()
-        #cols, vals = rmat_coo.col, rmat_coo.data        
+
+    # Calculate the summations for unlearn supported learning algorithm(summation form of the native algorithm)
+    # Mean Centering is only done with Item Means
+    # Vectorize version of _compute_similarities_unlearn_min_centering_sparse_slow
+    # This is the fastest implementation while maintaining completeness
+    def _compute_similarities_unlearn_min_centering_sparse_vectorize(self,rmat_scipy,items,users):        
         N = len(users)
         M = len(items)
-
-        #SUM_ITEM = np.zeros(M)
-        #Count_ITEM = np.zeros(M)
-        #MEAN_ITEM = np.zeros(M)
-        #Count_ITEMITEM_data = []
-        #S_ITEM_data = []
-        #S_ITEMITEM_data = []
-
-        #II_ROWS, II_COLS = [], []
-        '''
-        for i in range(rmat_scipy.nnz):
-            c, v = cols[i], vals[i]
-            SUM_ITEM[c] += v
-            Count_ITEM[c] += 1
-
-        MEAN_ITEM = SUM_ITEM / Count_ITEM
-        '''
         
         rmat_mask = rmat_scipy.copy()
         rmat_mask[rmat_scipy>0] = 1
@@ -522,8 +533,13 @@ class ItemItem(Predictor):
         self.S_II_sparse = rmat_scipy.transpose() @ rmat_scipy
         self.N_II_sparse = rmat_mask.transpose() @ rmat_mask
 
-        #
         
+        '''
+        ##################################################
+        # An Affort to debug csr_matrix indexing is made
+        # The csr indexing and coordinate indexing should get the same result
+        # However this is not the case
+        ##################################################
         #self.S_I_sparse.sort_indices()
         print("self.S_I_sparse.indices[self.S_I_sparse.indptr[138]:self.S_I_sparse.indptr[139]]: ",self.S_I_sparse.indices[self.S_I_sparse.indptr[138]:self.S_I_sparse.indptr[139]])
         print("self.S_I_sparse.data[self.S_I_sparse.indptr[138]:self.S_I_sparse.indptr[139]]: ",self.S_I_sparse.data[self.S_I_sparse.indptr[138]:self.S_I_sparse.indptr[139]])
@@ -535,7 +551,7 @@ class ItemItem(Predictor):
         print("self.S_I_sparse[17,138]",self.S_I_sparse[17,138])
         #print("self.S_I_sparse.getrow(17): ")
         #print(self.S_I_sparse.getrow(17))
-        
+        '''
         self.N_I = np.array(rmat_mask.sum(axis = 0)).squeeze()
         self.Sum_I = np.array(rmat_scipy.sum(axis=0)).squeeze()
         self.M_I = self.Sum_I / self.N_I
@@ -549,73 +565,15 @@ class ItemItem(Predictor):
         
         self.smat_unlearn_sparse_csr = self._learn_sim_vectorize()
 
-    def _compute_similarities_unlearn_min_centering_sparse(self,rmat_scipy,items,users):
-        
-        rmat_coo = rmat_scipy.tocoo()
-        rows, cols, vals = rmat_coo.row, rmat_coo.col, rmat_coo.data        
-        N = len(users)
-        M = len(items)
-        SUM_ITEM = np.zeros(M)
-        Count_ITEM = np.zeros(M)
-        MEAN_ITEM = np.zeros(M)
-        
-        Count_ITEMITEM_data = []
-        S_ITEM_data = []
-        S_ITEMITEM_data = []
-
-        II_ROWS, II_COLS = [], []
-        for i in range(rmat_scipy.nnz):
-            c, v = cols[i], vals[i]
-            SUM_ITEM[c] += v
-            Count_ITEM[c] += 1
-
-        MEAN_ITEM = SUM_ITEM / Count_ITEM
-        for i in range(N):
-            idx = np.argwhere(rows == i)
-            for k_idx in range(len(idx)):
-                for l_idx in range(len(idx)):
-                    k = cols[idx[k_idx]][0]
-                    l = cols[idx[l_idx]][0]
-                    II_ROWS.append(k)
-                    II_COLS.append(l)
-                    Count_ITEMITEM_data.append(1)
-                    S_ITEM_data.append(rmat_scipy[i,k])
-                    s_ii = rmat_scipy[i,k] * rmat_scipy[i,l]
-                    S_ITEMITEM_data.append(s_ii)
-        II_ROWS = np.array(II_ROWS)
-        II_COLS = np.array(II_COLS)
-        S_ITEM_data = np.array(S_ITEM_data)
-        S_ITEMITEM_data = np.array(S_ITEMITEM_data)
-        
-        Count_ITEMITEM = sps.csr_matrix((Count_ITEMITEM_data, (II_ROWS,II_COLS)), shape=(M,M))
-        S_ITEM = sps.csr_matrix((S_ITEM_data, (II_ROWS,II_COLS)), shape=(M,M))
-        S_ITEMITEM = sps.csr_matrix((S_ITEMITEM_data, (II_ROWS,II_COLS)), shape=(M,M))
-        
-        self.S_I_sparse = S_ITEM
-        self.S_II_sparse = S_ITEMITEM
-        self.N_II_sparse = Count_ITEMITEM
-
-        self.M_I = MEAN_ITEM
-        self.N_I = Count_ITEM
-        self.Sum_I = SUM_ITEM
-
-        self.M_I_sparse = sps.csr_matrix(MEAN_ITEM)
-        self.N_I_sparse = sps.csr_matrix(Count_ITEM)
-        self.Sum_I_sparse = sps.csr_matrix(SUM_ITEM)
-
-        self.N = N
-        self.M = M
-        
-        self.smat_unlearn_sparse_csr = self._learn_sim_vectorize()
     
+    # Unlearn Algorithm
+    # Mean Centering is only done with Item Means
+    # Alternative version of _unlearn_min_centering
+    # Remove User u rating for Item t
+    # csr_matrix features are used to decrease time cost
+    # Fastest unlearning implementation while maintaining completeness
     def _unlearn_min_centering_sparse(self,u,t,rmat_scipy,smat):
-        #print(type(self.Sum_I),type(self.M_I),type(self.N_I),type(self.S_II_sparse),type(self.S_I_sparse),type(self.S_II_sparse))
         val_u_t = rmat_scipy[u,t]
-        '''
-        self.Sum_I[0,t] -= val_u_t
-        self.M_I[0,t] = ( self.M_I[0,t] * self.N_I[0,t] - val_u_t ) / (self.N_I[0,t] - 1)
-        self.N_I[0,t] -= 1
-        '''
         self.Sum_I[t] -= val_u_t
         self.M_I[t] = ( self.M_I[t] * self.N_I[t] - val_u_t ) / (self.N_I[t] - 1)
         self.N_I[t] -= 1
@@ -631,17 +589,6 @@ class ItemItem(Predictor):
                     self.S_II_sparse[l,t] = self.S_II_sparse[t,l]
                     self.S_I_sparse[l,t] = self.S_I_sparse[t,l]
                     self.N_II_sparse[l,t] -= 1
-        '''
-        val_u_ls = rmat_scipy[u,:]
-        val_u_ls_mask = val_u_ls.copy()
-        val_u_ls_mask[val_u_ls > 0] = 1
-        self.S_II_sparse[t,:] -= val_u_t*val_u_ls.multiply(val_u_ls_mask)
-        self.S_I_sparse[t,:] -= val_u_t*val_u_ls_mask
-        self.N_II_sparse[t,:] -= val_u_ls_mask
-        '''
-        #indptr = self.N_II_sparse.indptr
-        #rmat_indptr = rmat_scipy.indptr
-        #rmat_indices = rmat_scipy.indices[rmat_indptr[u]:rmat_indptr[u+1]]
 
         for k in smat.getrow(t).indices:
             if k != t:
@@ -649,12 +596,9 @@ class ItemItem(Predictor):
                 smat[k,t] = self._learn_sim(self.S_II_sparse[k,t],self.S_II_sparse[k,k],self.S_II_sparse[t,t],self.S_I_sparse[k,t],self.S_I_sparse[t,k],self.M_I[k],self.M_I[t],self.N_II_sparse[k,t],self.N_I[k],self.N_I[t],self.Sum_I[k],self.Sum_I[t])
                 #print(self.S_II_sparse[k,t],self.S_II_sparse[k,k],self.S_II_sparse[t,t],self.S_I_sparse[k,t],self.S_I_sparse[t,k],self.M_I[0,k],self.M_I[0,t],self.N_II_sparse[k,t],self.N_I[0,k],self.N_I[0,t],self.Sum_I[0,k],self.Sum_I[0,t])
                 smat[t,k] = smat[k,t]
-            #print(smat[k,t],k,t)
-        #self.S_I_sparse.eliminate_zeros()
-        #self.S_II_sparse.eliminate_zeros()
-        #self.N_II_sparse.eliminate_zeros()
-        #smat.eliminate_zeros()
 
+    # Alternative version of _compute_similarities_unlearn_min_centering_sparse_vectorize
+    # They have similar speed but alternations are made to support _unlearn_min_centering_matrix
     def _compute_similarities_unlearn_min_centering_matrix_vectorize(self,rmat_scipy,items,users):
         N = len(users)
         M = len(items)
@@ -685,6 +629,11 @@ class ItemItem(Predictor):
         
         self.smat_unlearn_sparse_csr = self._learn_sim_vectorize()
 
+    # Unlearn Algorithm
+    # Mean Centering is only done with Item Means
+    # Alternative version of _unlearn_min_centering_sparse
+    # Fully ultilize csr indexing and resulted in faster speed
+    # However, it is bugged and cannpt maintain completeness
     def _unlearn_min_centering_matrix(self,u,t,rmat_scipy,smat,rmat):
         
         val_u_t = rmat_scipy[u,t]
@@ -740,39 +689,6 @@ class ItemItem(Predictor):
         #self.S_II_sparse.eliminate_zeros()
         #self.N_II_sparse.eliminate_zeros()
         smat.eliminate_zeros()
-
-    def _compute_similarities_unlearn_global_centering_matrix_vectorize(self,rmat_scipy,items,users):
-        M = len(items)
-        N = len(users)
-        rmat_mask = rmat_scipy.copy()
-        rmat_mask[rmat_scipy>0] = 1
-
-        self.N_I = rmat_mask.sum(axis = 0)
-        Sum_I = rmat_scipy.sum(axis=0)
-        
-        self.M_I = Sum_I / self.N_I
-        self.UM_I = rmat_scipy.mean(axis=1)
-        self.G = rmat_scipy.sum() / rmat_scipy.nnz
-
-        self.Sum_I = np.multiply((rmat_scipy - self.M_I - self.UM_I + self.G),rmat_mask.toarray()).sum(axis=0)
-        
-        self.M_I_sparse = sps.csr_matrix(self.M_I)
-        self.N_I_sparse = sps.csr_matrix(self.N_I)
-        self.Sum_I_sparse = sps.csr_matrix(self.Sum_I)
-        self.UM_I_sparse = sps.csr_matrix(self.UM_I)
-
-        self.N = N
-        self.M = M
-
-        #print(rmat_scipy.shape,self.UM_I_sparse.shape,self.UM_I.shape)
-        rmat_centered = sps.csr_matrix(rmat_scipy.toarray() - self.UM_I)
-        rmat_centered = rmat_centered.multiply(rmat_mask)
-        self.S_I_sparse = rmat_centered.transpose() @ rmat_mask
-        self.S_II_sparse = rmat_centered.transpose() @ rmat_centered
-        self.N_II_sparse = rmat_mask.transpose() @ rmat_mask
-
-        self.smat_unlearn_sparse_csr = self._learn_sim_global_vectorize()
-
 
     def _mean_center(self, ratings, rmat, items, users):
         if not self.center:
