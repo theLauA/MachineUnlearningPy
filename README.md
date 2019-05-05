@@ -16,9 +16,7 @@ Codes are injected in `./lenskit/algorithms/item_knn.py` method `fit` to run tim
 A pipeline is written in `./unlearn/basic.py` to run produce time cost evaluation for different input size \
 A visualization is written in `./unlearn/visualization.py` to graph the time cost evaluation stored in `.csv`
 
-
-
-# Python recommendation tools
+# LensKit Python Implementation
 
 [![Build Status](https://dev.azure.com/md0553/md/_apis/build/status/lenskit.lkpy)](https://dev.azure.com/md0553/md/_build/latest?definitionId=1)
 [![codecov](https://codecov.io/gh/lenskit/lkpy/branch/master/graph/badge.svg)](https://codecov.io/gh/lenskit/lkpy)

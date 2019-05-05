@@ -39,9 +39,5 @@ for n in range(10000,100000,1000):
     print(n)
     for i in range(10):
         train = ratings[['user','item','rating']][:n]
-        #print(train)
-        #train = train.drop([141],axis=0)
-        #print(n,i)
         eval('ItemItem',alg_li,train,train)
-        #output_writer.writerow([n,native_learn, learn_unlearn, unlearn])
 
