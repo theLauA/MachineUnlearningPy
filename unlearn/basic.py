@@ -28,31 +28,14 @@ def eval(aname, algo, train, test):
     results = fittable.fit(train)
 
     return 
-    #users = test.user.unique()
-    #recs = batch.recommend(fittable,users,100)
     
-    #recs['Algorithm'] = aname
-    #return recs
-
-all_recs = []
-test_data = []
 print(ratings.shape)
-#for train,test in xf.partition_users(ratings[['user','item','rating']],1000,xf.SampleFrac(0.2)):
-    
-    #test_data.append(test)
-    #print(train.shape)
-    #break
-    #all_recs.append(eval('ItemItem',alg_li,train,test))
-    #all_recs.append(eval('ALS',alg_als,train,test))
 
-#import csv 
-#output_file = open('output.csv',mode='w')
-#output_writer = csv.writer(output_file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-
+#############################################################################
+# Run Algorithms with differnt input Size
 #for n in range(200,10000,100):
-
-#for n in range(10000,100000,1000):
-for n in [200]:
+for n in range(10000,100000,1000):
+#for n in [200]:
     print(n)
     for i in range(10):
         train = ratings[['user','item','rating']][:n]
@@ -62,8 +45,3 @@ for n in [200]:
         eval('ItemItem',alg_li,train,train)
         #output_writer.writerow([n,native_learn, learn_unlearn, unlearn])
 
-#all_recs = pd.concat(all_recs,ignore_index=True)
-#print(all_recs.head())
-
-#test_data = pd.concat(test_data,ignore_index=True)
-#print(test_data.head())
